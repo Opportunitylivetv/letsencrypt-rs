@@ -8,11 +8,11 @@
 //! Signing certificate for example.org:
 //!
 //! ```rust,no_run
-//! # use self::acme_client::AcmeClient;
+//! # use self::acme_client::{AcmeChallengeKind, AcmeClient};
 //! AcmeClient::new()
 //!     .and_then(|ac| ac.set_domain("example.org"))
 //!     .and_then(|ac| ac.register_account(Some("contact@example.org")))
-//!     .and_then(|ac| ac.identify_domain())
+//!     .and_then(|ac| ac.identify_domain(AcmeChallengeKind::Http))
 //!     .and_then(|ac| ac.save_http_challenge_into("/var/www"))
 //!     .and_then(|ac| ac.simple_http_validation())
 //!     .and_then(|ac| ac.sign_certificate())
@@ -23,14 +23,14 @@
 //! Using your own keys and CSR to sign certificate:
 //!
 //! ```rust,no_run
-//! # use self::acme_client::AcmeClient;
+//! # use self::acme_client::{AcmeChallengeKind, AcmeClient};
 //! AcmeClient::new()
 //!     .and_then(|ac| ac.set_domain("example.org"))
 //!     .and_then(|ac| ac.load_user_key("user.key"))
 //!     .and_then(|ac| ac.load_domain_key("domain.key"))
 //!     .and_then(|ac| ac.load_csr("domain.csr"))
 //!     .and_then(|ac| ac.register_account(Some("contact@example.org")))
-//!     .and_then(|ac| ac.identify_domain())
+//!     .and_then(|ac| ac.identify_domain(AcmeChallengeKind::Http))
 //!     .and_then(|ac| ac.save_http_challenge_into("/var/www"))
 //!     .and_then(|ac| ac.simple_http_validation())
 //!     .and_then(|ac| ac.sign_certificate())
@@ -55,7 +55,7 @@
 //! ```
 //!
 //! Revoking signed certificate:
-//! 
+//!
 //! ```rust,no_run
 //! # use self::acme_client::AcmeClient;
 //! AcmeClient::new()
@@ -111,7 +111,16 @@ mod hyperx {
     header! { (ReplayNonce, "Replay-Nonce") => [String] }
 }
 
+#[derive(Clone)]
+pub enum AcmeChallenge {
+    Http(String, String, String),
+    Dns(String, String, String),
+}
 
+pub enum AcmeChallengeKind {
+    Http,
+    Dns,
+}
 
 /// Automatic Certificate Management Environment (ACME) client
 pub struct AcmeClient {
@@ -123,7 +132,7 @@ pub struct AcmeClient {
     domain_key: Option<PKey>,
     domain_csr: Option<X509Req>,
     challenges: Option<Json>,
-    http_challenge: Option<(String, String, String)>,
+    challenge: Option<AcmeChallenge>,
     signed_cert: Option<X509>,
     chain_url: Option<String>,
     saved_challenge_path: Option<PathBuf>,
@@ -141,7 +150,7 @@ impl Default for AcmeClient {
             domain_key: None,
             domain_csr: None,
             challenges: None,
-            http_challenge: None,
+            challenge: None,
             signed_cert: None,
             chain_url: None,
             saved_challenge_path: None,
@@ -234,7 +243,7 @@ impl AcmeClient {
             .as_ref()
             .and_then(|k| pem_encode_key(k, true).ok())
     }
- 
+
     /// Gets the private key as PEM.
     pub fn get_user_private_key(&self) -> Option<Vec<u8>> {
         self.user_key
@@ -260,9 +269,9 @@ impl AcmeClient {
     /// Saves user public key as PEM.
     pub fn save_user_public_key<P: AsRef<Path>>(self, path: P) -> Result<Self> {
         try!(self.user_key
-             .as_ref()
-             .ok_or("Key not found".into())
-             .and_then(|k| save_key(k, true, path)));
+            .as_ref()
+            .ok_or("Key not found".into())
+            .and_then(|k| save_key(k, true, path)));
         Ok(self)
     }
 
@@ -270,9 +279,9 @@ impl AcmeClient {
     /// Saves user private key as PEM.
     pub fn save_user_private_key<P: AsRef<Path>>(self, path: P) -> Result<Self> {
         try!(self.user_key
-             .as_ref()
-             .ok_or("Key not found".into())
-             .and_then(|k| save_key(k, false, path)));
+            .as_ref()
+            .ok_or("Key not found".into())
+            .and_then(|k| save_key(k, false, path)));
         Ok(self)
     }
 
@@ -280,9 +289,9 @@ impl AcmeClient {
     /// Saves domain public key as PEM.
     pub fn save_domain_public_key<P: AsRef<Path>>(self, path: P) -> Result<Self> {
         try!(self.domain_key
-             .as_ref()
-             .ok_or("Key not found".into())
-             .and_then(|k| save_key(k, true, path)));
+            .as_ref()
+            .ok_or("Key not found".into())
+            .and_then(|k| save_key(k, true, path)));
         Ok(self)
     }
 
@@ -290,9 +299,9 @@ impl AcmeClient {
     /// Saves domain private key as PEM.
     pub fn save_domain_private_key<P: AsRef<Path>>(self, path: P) -> Result<Self> {
         try!(self.domain_key
-             .as_ref()
-             .ok_or("Key not found".into())
-             .and_then(|k| save_key(k, false, path)));
+            .as_ref()
+            .ok_or("Key not found".into())
+            .and_then(|k| save_key(k, false, path)));
         Ok(self)
     }
 
@@ -349,8 +358,8 @@ impl AcmeClient {
         {
             let mut file = try!(File::create(path));
             let csr = try!(self.domain_csr
-                           .as_ref()
-                           .ok_or("CSR not found"));
+                .as_ref()
+                .ok_or("CSR not found"));
             let pem = try!(csr.to_pem());
             try!(file.write_all(&pem));
         }
@@ -392,7 +401,7 @@ impl AcmeClient {
         map.insert("agreement".to_owned(), self.agreement.to_json());
         if let Some(email) = email {
             map.insert("contract".to_owned(),
-            vec![format!("mailto:{}", email)].to_json());
+                       vec![format!("mailto:{}", email)].to_json());
         }
         let (status, resp) = try!(self.request("new-reg", map));
         match status {
@@ -405,7 +414,7 @@ impl AcmeClient {
 
 
     /// Makes new identifier authorization request and gets challenges for domain.
-    pub fn identify_domain(mut self) -> Result<Self> {
+    pub fn identify_domain(mut self, expected_challenge: AcmeChallengeKind) -> Result<Self> {
         info!("Sending identifier authorization request");
 
         let mut map = BTreeMap::new();
@@ -413,9 +422,9 @@ impl AcmeClient {
             let mut map = BTreeMap::new();
             map.insert("type".to_owned(), "dns".to_owned());
             map.insert("value".to_owned(),
-            try!(self.domain
-                 .clone()
-                 .ok_or("Domain not found. Use domain() to set a domain")));
+                       try!(self.domain
+                           .clone()
+                           .ok_or("Domain not found. Use domain() to set a domain")));
             map
         });
         let (status, resp) = try!(self.request("new-authz", map));
@@ -426,40 +435,49 @@ impl AcmeClient {
 
         self.challenges = Some(resp.clone());
 
+        let expected_type = match expected_challenge {
+            AcmeChallengeKind::Http => "http-01",
+            AcmeChallengeKind::Dns => "dns-01",
+        };
+
         for challenge in try!(resp.as_object()
-                              .and_then(|obj| obj.get("challenges"))
-                              .and_then(|c| c.as_array())
-                              .ok_or("No challenge found")) {
+            .and_then(|obj| obj.get("challenges"))
+            .and_then(|c| c.as_array())
+            .ok_or("No challenge found")) {
 
             // skip challenges other than http
             // FIXME: http-01 is Let's Encrypt specific
             if !challenge.as_object()
                 .and_then(|obj| obj.get("type"))
-                    .and_then(|t| t.as_string())
-                    .and_then(|t| Some(t == "http-01"))
-                    .unwrap_or(false) {
-                        continue;
-                    }
+                .and_then(|t| t.as_string())
+                .and_then(|t| Some(t == expected_type))
+                .unwrap_or(false) {
+                continue;
+            }
 
             let uri = try!(challenge.as_object()
-                           .and_then(|obj| obj.get("uri"))
-                           .and_then(|t| t.as_string())
-                           .ok_or("URI not found in http challange"))
+                    .and_then(|obj| obj.get("uri"))
+                    .and_then(|t| t.as_string())
+                    .ok_or("URI not found in http challange"))
                 .to_owned();
 
             let token = try!(challenge.as_object()
-                             .and_then(|obj| obj.get("token"))
-                             .and_then(|t| t.as_string())
-                             .ok_or("Token not found in http challange"))
+                    .and_then(|obj| obj.get("token"))
+                    .and_then(|t| t.as_string())
+                    .ok_or("Token not found in http challange"))
                 .to_owned();
 
 
-            let key_authorization =
-                format!("{}.{}",
-                        token,
-                        b64(try!(hash(Type::SHA256, &try!(encode(&try!(self.jwk()))).into_bytes()))));
+            let key_authorization = format!("{}.{}",
+                                            token,
+                                            b64(try!(hash(Type::SHA256,
+                                                          &try!(encode(&try!(self.jwk())))
+                                                              .into_bytes()))));
 
-            self.http_challenge = Some((uri, token, key_authorization));
+            self.challenge = match expected_challenge {
+                AcmeChallengeKind::Http => Some(AcmeChallenge::Http(uri, token, key_authorization)),
+                AcmeChallengeKind::Dns => Some(AcmeChallenge::Dns(uri, token, key_authorization)),
+            }
         }
 
         Ok(self)
@@ -470,11 +488,27 @@ impl AcmeClient {
     ///
     /// Get challenges first with `identify_domain()`.
     pub fn get_http_challenge(&self) -> Result<(String, String, String)> {
-        let (uri, token, key_authorization) =
-            try!(self.http_challenge.clone().ok_or("HTTP challenge not found"));
-        Ok((uri, token, key_authorization))
+        let challenge = try!(self.challenge.clone().ok_or("No challenge found"));
+        match challenge {
+            AcmeChallenge::Dns(_, _, _) => Err("HTTP challenge not found".into()),
+            AcmeChallenge::Http(uri, token, key_authorization) => {
+                Ok((uri, token, key_authorization))
+            }
+        }
     }
 
+    /// Returns `(uri, token, key_authorization)` from DNS challenge.
+    ///
+    /// Get challenges first with `identify_domain()`.
+    pub fn get_dns_challenge(&self) -> Result<(String, String, String)> {
+        let challenge = try!(self.challenge.clone().ok_or("No challenge found"));
+        match challenge {
+            AcmeChallenge::Http(_, _, _) => Err("DNS challenge not found".into()),
+            AcmeChallenge::Dns(uri, token, key_authorization) => {
+                Ok((uri, token, key_authorization))
+            }
+        }
+    }
 
     /// Saves validation token into `{path}/.well-known/acme-challenge/{token}`.
     pub fn save_http_challenge_into<P: AsRef<Path>>(mut self, path: P) -> Result<Self> {
@@ -495,9 +529,14 @@ impl AcmeClient {
 
 
     /// Triggers HTTP validation to verify domain ownership.
+    /// Will use either the HTTP or DNS challenge.
     pub fn simple_http_validation(self) -> Result<Self> {
         info!("Triggering simple HTTP validation");
-        let (uri, _, key_authorization) = try!(self.get_http_challenge());
+        let challenge = try!(self.challenge.clone().ok_or("No challenge found"));
+        let (uri, key_authorization) = match challenge {
+            AcmeChallenge::Http(uri, _, key_authorization) => (uri, key_authorization),
+            AcmeChallenge::Dns(uri, _, key_authorization) => (uri, key_authorization),
+        };
 
         let map = {
             let mut map: BTreeMap<String, Json> = BTreeMap::new();
@@ -508,8 +547,8 @@ impl AcmeClient {
 
         let client = Client::new();
         let mut resp = try!(client.post(&uri)
-                            .body(&try!(self.jws(map)))
-                            .send());
+            .body(&try!(self.jws(map)))
+            .send());
 
         let mut res_json: Json = {
             let mut res_content = String::new();
@@ -523,9 +562,9 @@ impl AcmeClient {
 
         loop {
             let status = try!(res_json.as_object()
-                              .and_then(|o| o.get("status"))
-                              .and_then(|s| s.as_string())
-                              .ok_or("Status not found"))
+                    .and_then(|o| o.get("status"))
+                    .and_then(|s| s.as_string())
+                    .ok_or("Status not found"))
                 .to_owned();
 
             if status == "pending" {
@@ -568,8 +607,8 @@ impl AcmeClient {
             let client = Client::new();
             let jws = try!(self.jws(map));
             let mut res = try!(client.post(&format!("{}/acme/new-cert", self.ca_server))
-                               .body(&jws)
-                               .send());
+                .body(&jws)
+                .send());
 
             if res.status != StatusCode::Created {
                 let res_json = {
@@ -614,9 +653,8 @@ impl AcmeClient {
     pub fn write_signed_certificate<W: Write>(self, mut writer: &mut W) -> Result<Self> {
         {
             let crt = try!(self.signed_cert
-                           .as_ref()
-                           .ok_or("Signed certificate not found, sign certificate \
-                        with sigh_certificate() \
+                .as_ref()
+                .ok_or("Signed certificate not found, sign certificate with sigh_certificate() \
                         first"));
 
             let pem = try!(crt.to_pem());
@@ -641,9 +679,9 @@ impl AcmeClient {
     pub fn revoke_signed_certificate(self) -> Result<Self> {
         let (status, resp) = {
             let crt = try!(self.signed_cert
-                           .as_ref()
-                           .ok_or("Signed certificate not found, load a signed \
-                              certificate with load_certificate() first"));
+                .as_ref()
+                .ok_or("Signed certificate not found, load a signed certificate with \
+                        load_certificate() first"));
 
             let mut map = BTreeMap::new();
             map.insert("certificate".to_owned(), b64(try!(crt.to_der())));
@@ -669,8 +707,8 @@ impl AcmeClient {
         let jws = try!(self.jws(json));
         let client = Client::new();
         let mut res = try!(client.post(&format!("{}/acme/{}", self.ca_server, resource))
-                           .body(&jws)
-                           .send());
+            .body(&jws)
+            .send());
 
         let res_json = {
             let mut res_content = String::new();
@@ -724,9 +762,11 @@ impl AcmeClient {
     fn jwk(&self) -> Result<Json> {
         let rsa = try!(try!(self.user_key.as_ref().ok_or("Key not found")).get_rsa());
         let mut jwk: BTreeMap<String, String> = BTreeMap::new();
-        jwk.insert("e".to_owned(), b64(try!(rsa.e().ok_or("e not found in RSA key")).to_vec()));
+        jwk.insert("e".to_owned(),
+                   b64(try!(rsa.e().ok_or("e not found in RSA key")).to_vec()));
         jwk.insert("kty".to_owned(), "RSA".to_owned());
-        jwk.insert("n".to_owned(), b64(try!(rsa.n().ok_or("n not found in RSA key")).to_vec()));
+        jwk.insert("n".to_owned(),
+                   b64(try!(rsa.n().ok_or("n not found in RSA key")).to_vec()));
         Ok(jwk.to_json())
     }
 
@@ -844,7 +884,7 @@ fn acme_server_error_description(resp: &Json) -> String {
 /// Ignored tests are using TEST_DOMAIN and TEST_PUBLIC_DIR environment variables.
 mod tests {
     extern crate env_logger;
-    use super::{AcmeClient, LETSENCRYPT_AGREEMENT};
+    use super::{AcmeChallengeKind, AcmeClient, LETSENCRYPT_AGREEMENT};
     use std::collections::BTreeMap;
     use std::env;
     use hyper::status::StatusCode;
@@ -867,11 +907,11 @@ mod tests {
     #[test]
     fn test_gen_csr() {
         assert!(AcmeClient::new()
-                .and_then(|ac| ac.set_domain("example.org"))
-                .and_then(|ac| ac.gen_csr())
-                .unwrap()
-                .domain_csr
-                .is_some());
+            .and_then(|ac| ac.set_domain("example.org"))
+            .and_then(|ac| ac.gen_csr())
+            .unwrap()
+            .domain_csr
+            .is_some());
     }
 
     #[test]
@@ -882,10 +922,10 @@ mod tests {
 
         assert!(AcmeClient::default().load_user_key("tests/user.key").unwrap().user_key.is_some());
         assert!(AcmeClient::default()
-                .load_domain_key("tests/domain.key")
-                .unwrap()
-                .domain_key
-                .is_some());
+            .load_domain_key("tests/domain.key")
+            .unwrap()
+            .domain_key
+            .is_some());
         assert!(AcmeClient::default().load_csr("tests/domain.csr").unwrap().domain_csr.is_some());
     }
 
@@ -893,7 +933,8 @@ mod tests {
     fn test_get_user_private_key() {
         let res = AcmeClient::default()
             .set_domain("example.org")
-            .and_then(|ac| ac.gen_user_key()).ok()
+            .and_then(|ac| ac.gen_user_key())
+            .ok()
             .and_then(|ac| ac.get_user_private_key());
 
         assert!(res.is_some());
@@ -903,7 +944,8 @@ mod tests {
     fn test_get_user_public_key() {
         let res = AcmeClient::default()
             .set_domain("example.org")
-            .and_then(|ac| ac.gen_user_key()).ok()
+            .and_then(|ac| ac.gen_user_key())
+            .ok()
             .and_then(|ac| ac.get_user_public_key());
 
         assert!(res.is_some());
@@ -914,7 +956,8 @@ mod tests {
         let res = AcmeClient::default()
             .set_domain("example.org")
             .and_then(|ac| ac.gen_domain_key())
-            .and_then(|ac| ac.gen_domain_key()).ok()
+            .and_then(|ac| ac.gen_domain_key())
+            .ok()
             .and_then(|ac| ac.get_domain_public_key());
 
         assert!(res.is_some());
@@ -925,7 +968,8 @@ mod tests {
         let res = AcmeClient::default()
             .set_domain("example.org")
             .and_then(|ac| ac.gen_domain_key())
-            .and_then(|ac| ac.gen_domain_key()).ok()
+            .and_then(|ac| ac.gen_domain_key())
+            .ok()
             .and_then(|ac| ac.get_domain_private_key());
 
         assert!(res.is_some());
@@ -968,7 +1012,8 @@ mod tests {
         let _ = env_logger::init();
         let ac = AcmeClient::new()
             .and_then(|ac| ac.set_ca_server(LETSENCRYPT_STAGING_CA_SERVER))
-            .and_then(|ac| ac.gen_user_key()).unwrap();
+            .and_then(|ac| ac.gen_user_key())
+            .unwrap();
         let mut map = BTreeMap::new();
         map.insert("aggreement".to_owned(), LETSENCRYPT_AGREEMENT.to_owned());
         let res = ac.request("new-reg", map);
@@ -982,13 +1027,16 @@ mod tests {
     #[test]
     fn test_register_account() {
         let _ = env_logger::init();
-        assert!(AcmeClient::default().set_ca_server(LETSENCRYPT_STAGING_CA_SERVER)
-                .and_then(|ac| ac.gen_user_key())
-                .and_then(|ac| ac.register_account(None))
-                .is_ok());
-        assert!(AcmeClient::default().set_ca_server(LETSENCRYPT_STAGING_CA_SERVER)
-                .and_then(|ac| ac.gen_user_key())
-                .and_then(|ac| ac.register_account(Some("example@example.org"))).is_ok());
+        assert!(AcmeClient::default()
+            .set_ca_server(LETSENCRYPT_STAGING_CA_SERVER)
+            .and_then(|ac| ac.gen_user_key())
+            .and_then(|ac| ac.register_account(None))
+            .is_ok());
+        assert!(AcmeClient::default()
+            .set_ca_server(LETSENCRYPT_STAGING_CA_SERVER)
+            .and_then(|ac| ac.gen_user_key())
+            .and_then(|ac| ac.register_account(Some("example@example.org")))
+            .is_ok());
         assert!(AcmeClient::default().set_ca_server(LETSENCRYPT_STAGING_CA_SERVER)
                 .and_then(|ac| ac.gen_user_key())
                 .and_then(|ac| ac.register_account(None))
@@ -997,14 +1045,27 @@ mod tests {
     }
 
     #[test]
-    fn test_identify_domain() {
+    fn test_identify_domain_http() {
         let _ = env_logger::init();
-        assert!(AcmeClient::default().set_ca_server(LETSENCRYPT_STAGING_CA_SERVER)
-                .and_then(|ac| ac.gen_user_key())
-                .and_then(|ac| ac.set_domain("example.org"))
-                .and_then(|ac| ac.register_account(None))
-                .and_then(|ac| ac.identify_domain())
-                .is_ok());
+        assert!(AcmeClient::default()
+            .set_ca_server(LETSENCRYPT_STAGING_CA_SERVER)
+            .and_then(|ac| ac.gen_user_key())
+            .and_then(|ac| ac.set_domain("example.org"))
+            .and_then(|ac| ac.register_account(None))
+            .and_then(|ac| ac.identify_domain(AcmeChallengeKind::Http))
+            .is_ok());
+    }
+
+    #[test]
+    fn test_identify_domain_dns() {
+        let _ = env_logger::init();
+        assert!(AcmeClient::default()
+            .set_ca_server(LETSENCRYPT_STAGING_CA_SERVER)
+            .and_then(|ac| ac.gen_user_key())
+            .and_then(|ac| ac.set_domain("example.org"))
+            .and_then(|ac| ac.register_account(None))
+            .and_then(|ac| ac.identify_domain(AcmeChallengeKind::Dns))
+            .is_ok());
     }
 
     #[test]
@@ -1015,7 +1076,7 @@ mod tests {
             .and_then(|ac| ac.gen_user_key())
             .and_then(|ac| ac.set_domain("example.org"))
             .and_then(|ac| ac.register_account(None))
-            .and_then(|ac| ac.identify_domain())
+            .and_then(|ac| ac.identify_domain(AcmeChallengeKind::Http))
             .and_then(|ac| ac.get_http_challenge());
         assert!(ac.is_ok());
 
@@ -1025,18 +1086,35 @@ mod tests {
         assert!(!key_authorization.is_empty());
     }
 
+    #[test]
+    fn test_get_dns_challenge() {
+        let _ = env_logger::init();
+        let ac = AcmeClient::default()
+            .set_ca_server(LETSENCRYPT_STAGING_CA_SERVER)
+            .and_then(|ac| ac.gen_user_key())
+            .and_then(|ac| ac.set_domain("example.org"))
+            .and_then(|ac| ac.register_account(None))
+            .and_then(|ac| ac.identify_domain(AcmeChallengeKind::Dns))
+            .and_then(|ac| ac.get_dns_challenge());
+        assert!(ac.is_ok());
+
+        let (uri, token, key_authorization) = ac.unwrap();
+        assert!(!uri.is_empty());
+        assert!(!token.is_empty());
+        assert!(!key_authorization.is_empty());
+    }
 
     #[test]
     fn test_save_http_challenge_into() {
         let _ = env_logger::init();
         assert!(AcmeClient::default()
-                .set_ca_server(LETSENCRYPT_STAGING_CA_SERVER)
-                .and_then(|ac| ac.gen_user_key())
-                .and_then(|ac| ac.set_domain("example.org"))
-                .and_then(|ac| ac.register_account(None))
-                .and_then(|ac| ac.identify_domain())
-                .and_then(|ac| ac.save_http_challenge_into("test"))
-                .is_ok());
+            .set_ca_server(LETSENCRYPT_STAGING_CA_SERVER)
+            .and_then(|ac| ac.gen_user_key())
+            .and_then(|ac| ac.set_domain("example.org"))
+            .and_then(|ac| ac.register_account(None))
+            .and_then(|ac| ac.identify_domain(AcmeChallengeKind::Http))
+            .and_then(|ac| ac.save_http_challenge_into("test"))
+            .is_ok());
         use std::fs::remove_dir_all;
         remove_dir_all("test").unwrap();
     }
@@ -1050,7 +1128,7 @@ mod tests {
             .and_then(|ac| ac.load_user_key("tests/user.key"))
             .and_then(|ac| ac.set_domain(&env::var("TEST_DOMAIN").unwrap()))
             .and_then(|ac| ac.register_account(None))
-            .and_then(|ac| ac.identify_domain())
+            .and_then(|ac| ac.identify_domain(AcmeChallengeKind::Http))
             .and_then(|ac| ac.save_http_challenge_into(&env::var("TEST_PUBLIC_DIR").unwrap()))
             .and_then(|ac| ac.simple_http_validation());
 
@@ -1071,7 +1149,7 @@ mod tests {
             .and_then(|ac| ac.set_domain(&env::var("TEST_DOMAIN").unwrap()))
             .and_then(|ac| ac.register_account(None))
             .and_then(|ac| ac.gen_csr())
-            .and_then(|ac| ac.identify_domain())
+            .and_then(|ac| ac.identify_domain(AcmeChallengeKind::Http))
             .and_then(|ac| ac.save_http_challenge_into(&env::var("TEST_PUBLIC_DIR").unwrap()))
             .and_then(|ac| ac.simple_http_validation())
             .and_then(|ac| ac.sign_certificate());
@@ -1093,7 +1171,7 @@ mod tests {
             .and_then(|ac| ac.set_domain(&env::var("TEST_DOMAIN").unwrap()))
             .and_then(|ac| ac.register_account(None))
             .and_then(|ac| ac.gen_csr())
-            .and_then(|ac| ac.identify_domain())
+            .and_then(|ac| ac.identify_domain(AcmeChallengeKind::Http))
             .and_then(|ac| ac.save_http_challenge_into(&env::var("TEST_PUBLIC_DIR").unwrap()))
             .and_then(|ac| ac.simple_http_validation())
             .and_then(|ac| ac.sign_certificate())
@@ -1117,7 +1195,7 @@ mod tests {
             .and_then(|ac| ac.set_domain(&env::var("TEST_DOMAIN").unwrap()))
             .and_then(|ac| ac.register_account(None))
             .and_then(|ac| ac.gen_csr())
-            .and_then(|ac| ac.identify_domain())
+            .and_then(|ac| ac.identify_domain(AcmeChallengeKind::Http))
             .and_then(|ac| ac.save_http_challenge_into(&env::var("TEST_PUBLIC_DIR").unwrap()))
             .and_then(|ac| ac.simple_http_validation())
             .and_then(|ac| ac.sign_certificate())
@@ -1149,10 +1227,11 @@ mod tests {
             .set_ca_server(LETSENCRYPT_STAGING_CA_SERVER)
             .and_then(|ac| ac.load_user_key("tests/user.key"))
             .and_then(|ac| ac.set_domain(&env::var("TEST_DOMAIN").unwrap()))
-            .and_then(|ac| ac.set_chain_url("https://letsencrypt.org/certs/\
-                                            lets-encrypt-x3-cross-signed.pem"))
+            .and_then(|ac| {
+                ac.set_chain_url("https://letsencrypt.org/certs/lets-encrypt-x3-cross-signed.pem")
+            })
             .and_then(|ac| ac.register_account(Some("onur@onur.im")))
-            .and_then(|ac| ac.identify_domain())
+            .and_then(|ac| ac.identify_domain(AcmeChallengeKind::Http))
             .and_then(|ac| ac.save_http_challenge_into(&env::var("TEST_PUBLIC_DIR").unwrap()))
             .and_then(|ac| ac.simple_http_validation())
             .and_then(|ac| ac.sign_certificate())
