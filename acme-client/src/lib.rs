@@ -85,7 +85,7 @@ use openssl::crypto::rsa::RSA;
 use openssl::crypto::pkey::PKey;
 use openssl::crypto::hash::{hash, Type};
 use openssl::x509::{X509, X509Req, X509Generator};
-use openssl::x509::extension::{Extension, KeyUsageOption};
+use openssl::x509::extension::{AltNameOption, Extension, KeyUsageOption};
 
 use hyper::Client;
 use hyper::status::StatusCode;
@@ -135,6 +135,7 @@ pub struct AcmeClient {
     challenge: Option<AcmeChallenge>,
     signed_cert: Option<X509>,
     chain_url: Option<String>,
+    sans: Option<Vec<String>>,
     saved_challenge_path: Option<PathBuf>,
 }
 
@@ -153,6 +154,7 @@ impl Default for AcmeClient {
             challenge: None,
             signed_cert: None,
             chain_url: None,
+            sans: None,
             saved_challenge_path: None,
         }
     }
@@ -171,6 +173,18 @@ impl AcmeClient {
         Ok(self)
     }
 
+    /// Add a Subject Alternative Name
+    pub fn add_san(mut self, domain: &str) -> Result<Self> {
+        if let Some(ref mut sans) = self.sans {
+            sans.push(domain.to_owned());
+        } else {
+            let mut sans = Vec::new();
+            sans.push(domain.to_owned());
+            self.sans = Some(sans);
+        }
+
+        Ok(self)
+    }
 
     /// Sets CA server, default is: `https://acme-v01.api.letsencrypt.org`
     pub fn set_ca_server(mut self, ca_server: &str) -> Result<Self> {
@@ -330,6 +344,15 @@ impl AcmeClient {
             .add_name("CN".to_owned(), domain)
             .set_sign_hash(Type::SHA256)
             .add_extension(Extension::KeyUsage(vec![KeyUsageOption::DigitalSignature]));
+
+        let generator = if let Some(ref sans) = self.sans {
+            let san_extensions = sans.iter()
+                .map(|name| (AltNameOption::DNS, name.clone())).collect();
+
+            generator.add_extension(Extension::SubjectAltName(san_extensions))
+        } else {
+            generator
+        };
 
         {
             let domain_key = try!(self.domain_key.as_ref().ok_or("Domain key not found"));
@@ -1117,6 +1140,29 @@ mod tests {
             .is_ok());
         use std::fs::remove_dir_all;
         remove_dir_all("test").unwrap();
+    }
+
+    #[test]
+    fn test_add_san() {
+        let _ = env_logger::init();
+
+        let ac = AcmeClient::default()
+            .set_ca_server(LETSENCRYPT_STAGING_CA_SERVER)
+            .and_then(|ac| ac.set_domain("example.com"))
+            .and_then(|ac| ac.add_san("a.example.com"))
+            .and_then(|ac| ac.add_san("b.example.com"));
+
+        if let Err(e) = ac.as_ref() {
+            error!("{}", e);
+        }
+
+        let ac = ac.unwrap();
+
+        if let Some(ref sans) = ac.sans {
+            assert!(sans.len() == 2);
+        } else {
+            panic!("SANs field in AcmeClient should contain two Subject Alternate Names");
+        }
     }
 
     #[ignore]
