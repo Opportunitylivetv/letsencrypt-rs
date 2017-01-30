@@ -35,6 +35,12 @@ fn main() {
                 .long("domain")
                 .required(true)
                 .takes_value(true))
+            .arg(Arg::with_name("SAN_LIST")
+                 .help("List of additional domains for identification, these will form the entries in the SAN extension")
+                 .short("s")
+                 .long("san")
+                 .multiple(true)
+                 .takes_value(true))
             .arg(Arg::with_name("PUBLIC_DIR")
                 .help("Directory to save ACME simple http challenge. This option is required.")
                 .short("P")
@@ -112,6 +118,14 @@ fn main() {
 
         if let Some(domain) = matches.value_of("DOMAIN") {
             ac = ac.set_domain(domain).expect("Failed to set domain")
+        }
+
+        if let Some(sans) = matches.values_of("SAN_LIST") {
+            let sans: Vec<_> = sans.collect();
+
+            ac = sans.iter().fold(ac, | ac, name | {
+                ac.add_san(name).expect("Failed to add SAN")
+            });
         }
 
         if matches.is_present("CHAIN") {
