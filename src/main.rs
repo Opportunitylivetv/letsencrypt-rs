@@ -140,7 +140,7 @@ fn main() {
         ac = ac.register_account(matches.value_of("EMAIL"))
             .and_then(|ac| ac.identify_domain(AcmeChallengeKind::Http))
             .and_then(|ac| ac.save_http_challenge_into(matches.value_of("PUBLIC_DIR").unwrap()))
-            .and_then(|ac| ac.simple_http_validation())  // unwrap is fine here ~~~~^
+            .and_then(|ac| ac.validate_domains())  // unwrap is fine here ~~~~^
             .and_then(|ac| ac.sign_certificate())        // PUBLIC_DIR is always required
             .expect("Failed to sign certificate");
 

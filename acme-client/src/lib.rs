@@ -74,7 +74,6 @@ extern crate hyper;
 extern crate openssl;
 extern crate rustc_serialize;
 
-
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::io;
@@ -113,10 +112,14 @@ mod hyperx {
 
 #[derive(Clone)]
 pub enum AcmeChallenge {
+    /// (uri, token, key_authorization)
     Http(String, String, String),
+
+    /// (uri, token, key_authorization)
     Dns(String, String, String),
 }
 
+#[derive(Clone, Copy)]
 pub enum AcmeChallengeKind {
     Http,
     Dns,
@@ -131,8 +134,7 @@ pub struct AcmeClient {
     domain: Option<String>,
     domain_key: Option<PKey>,
     domain_csr: Option<X509Req>,
-    challenges: Option<Json>,
-    challenge: Option<AcmeChallenge>,
+    challenges: BTreeMap<String, AcmeChallenge>,
     signed_cert: Option<X509>,
     chain_url: Option<String>,
     sans: Option<Vec<String>>,
@@ -150,8 +152,7 @@ impl Default for AcmeClient {
             domain: None,
             domain_key: None,
             domain_csr: None,
-            challenges: None,
-            challenge: None,
+            challenges: BTreeMap::default(),
             signed_cert: None,
             chain_url: None,
             sans: None,
@@ -320,7 +321,7 @@ impl AcmeClient {
     }
 
 
-    /// Sets bit lenght for CSR generation. Only 1024, 2048 and 4096 allowed.
+    /// Sets bit length for CSR generation. Only 1024, 2048 and 4096 allowed.
     ///
     /// Default is 2048.
     pub fn set_bit_length(mut self, bit_length: u32) -> Result<Self> {
@@ -332,7 +333,7 @@ impl AcmeClient {
     }
 
 
-    /// Generates new certificate signing request for domain.
+    /// Generates new certificate signing request for the given domain and sans
     ///
     /// You need to set a domain name with `domain()` first.
     pub fn gen_csr(mut self) -> Result<Self> {
@@ -435,41 +436,36 @@ impl AcmeClient {
         Ok(self)
     }
 
-
-    /// Makes new identifier authorization request and gets challenges for domain.
-    pub fn identify_domain(mut self, expected_challenge: AcmeChallengeKind) -> Result<Self> {
+    fn _identify_domain(mut self, expected_challenge: AcmeChallengeKind, domain: &str) -> Result<Self> {
         info!("Sending identifier authorization request");
 
         let mut map = BTreeMap::new();
         map.insert("identifier".to_owned(), {
             let mut map = BTreeMap::new();
             map.insert("type".to_owned(), "dns".to_owned());
-            map.insert("value".to_owned(),
-                       try!(self.domain
-                           .clone()
-                           .ok_or("Domain not found. Use domain() to set a domain")));
+            map.insert("value".to_owned(), domain.to_owned());
             map
         });
+
         let (status, resp) = try!(self.request("new-authz", map));
 
         if status != StatusCode::Created {
             return Err(ErrorKind::AcmeServerError(resp).into());
         }
 
-        self.challenges = Some(resp.clone());
-
         let expected_type = match expected_challenge {
             AcmeChallengeKind::Http => "http-01",
             AcmeChallengeKind::Dns => "dns-01",
         };
 
-        for challenge in try!(resp.as_object()
+        let challenges = resp.as_object()
             .and_then(|obj| obj.get("challenges"))
             .and_then(|c| c.as_array())
-            .ok_or("No challenge found")) {
+            .ok_or("No challenges found");
 
-            // skip challenges other than http
-            // FIXME: http-01 is Let's Encrypt specific
+        for challenge in try!(challenges) {
+            // Skip challenges that are not the expected type.
+
             if !challenge.as_object()
                 .and_then(|obj| obj.get("type"))
                 .and_then(|t| t.as_string())
@@ -479,63 +475,89 @@ impl AcmeClient {
             }
 
             let uri = try!(challenge.as_object()
-                    .and_then(|obj| obj.get("uri"))
-                    .and_then(|t| t.as_string())
-                    .ok_or("URI not found in http challange"))
+                .and_then(|obj| obj.get("uri"))
+                .and_then(|t| t.as_string())
+                .ok_or("URI not found in challenge"))
                 .to_owned();
 
             let token = try!(challenge.as_object()
-                    .and_then(|obj| obj.get("token"))
-                    .and_then(|t| t.as_string())
-                    .ok_or("Token not found in http challange"))
+                .and_then(|obj| obj.get("token"))
+                .and_then(|t| t.as_string())
+                .ok_or("Token not found in challenge"))
                 .to_owned();
 
-
             let key_authorization = format!("{}.{}",
-                                            token,
-                                            b64(try!(hash(Type::SHA256,
-                                                          &try!(encode(&try!(self.jwk())))
-                                                              .into_bytes()))));
+                                            token, b64(try!(hash(Type::SHA256,
+                                                                 &try!(encode(&try!(self.jwk())))
+                                                                    .into_bytes()))));
+            self.challenges.insert(domain.to_owned(), match expected_challenge {
+                AcmeChallengeKind::Http => AcmeChallenge::Http(uri, token, key_authorization),
+                AcmeChallengeKind::Dns => AcmeChallenge::Dns(uri, token, key_authorization),
+            });
 
-            self.challenge = match expected_challenge {
-                AcmeChallengeKind::Http => Some(AcmeChallenge::Http(uri, token, key_authorization)),
-                AcmeChallengeKind::Dns => Some(AcmeChallenge::Dns(uri, token, key_authorization)),
-            }
+            break;
         }
 
         Ok(self)
     }
 
+    /// Makes new identifier authorization request and gets challenges for domain.
+    pub fn identify_domain(self, expected_challenge: AcmeChallengeKind) -> Result<Self> {
+        let domain = try!(self.domain.clone().ok_or("Domain not found. Use domain() to set a primary domain")).clone();
+
+        let mut ac = try!(self._identify_domain(
+            expected_challenge,
+            &domain));
+
+        // Identify each SAN
+        if let Some(sans) = ac.sans.clone() {
+            for san in sans {
+                ac = try!(ac._identify_domain(
+                    expected_challenge,
+                    &san));
+            }
+        }
+
+        Ok(ac)
+    }
 
     /// Returns `(uri, token, key_authorization)` from HTTP challenge.
     ///
     /// Get challenges first with `identify_domain()`.
-    pub fn get_http_challenge(&self) -> Result<(String, String, String)> {
-        let challenge = try!(self.challenge.clone().ok_or("No challenge found"));
+    pub fn get_http_challenge(&self, domain: &str) -> Result<(String, String, String)> {
+        let challenge = try!(self.challenges.get(domain).clone().ok_or(format!("No challenge found for domain {}.", domain)));
         match challenge {
-            AcmeChallenge::Dns(_, _, _) => Err("HTTP challenge not found".into()),
-            AcmeChallenge::Http(uri, token, key_authorization) => {
-                Ok((uri, token, key_authorization))
+            &AcmeChallenge::Dns(_, _, _) => Err("HTTP challenge not found".into()),
+            &AcmeChallenge::Http(ref uri, ref token, ref key_authorization) => {
+                Ok((uri.to_owned(), token.to_owned(), key_authorization.to_owned()))
             }
         }
     }
 
-    /// Returns `(uri, token, key_authorization)` from DNS challenge.
+    /// Returns `Vec<(uri, token, key_authorization)>` from DNS challenge.
     ///
     /// Get challenges first with `identify_domain()`.
-    pub fn get_dns_challenge(&self) -> Result<(String, String, String)> {
-        let challenge = try!(self.challenge.clone().ok_or("No challenge found"));
+    pub fn get_dns_challenge(&self, domain: &str) -> Result<(String, String, String)> {
+        let challenge = try!(self.challenges.get(domain).clone().ok_or(format!("No challenge found for {}", domain)));
         match challenge {
-            AcmeChallenge::Http(_, _, _) => Err("DNS challenge not found".into()),
-            AcmeChallenge::Dns(uri, token, key_authorization) => {
-                Ok((uri, token, key_authorization))
+            &AcmeChallenge::Http(_, _, _) => Err("DNS challenge not found".into()),
+            &AcmeChallenge::Dns(ref uri, ref token, ref key_authorization) => {
+                Ok((uri.to_owned(), token.to_owned(), key_authorization.to_owned()))
             }
+        }
+    }
+
+    pub fn save_http_challenge_into<P: AsRef<Path>>(self, path: P) -> Result<Self> {
+        if let Some(domain) = self.domain.clone() {
+            self.save_http_challenge_for_domain_into(&domain, path)
+        } else {
+            Err(ErrorKind::ConfigurationError("Domain not found. Use domain() to set a domain").into())
         }
     }
 
     /// Saves validation token into `{path}/.well-known/acme-challenge/{token}`.
-    pub fn save_http_challenge_into<P: AsRef<Path>>(mut self, path: P) -> Result<Self> {
-        let (_, token, key_authorization) = try!(self.get_http_challenge());
+    pub fn save_http_challenge_for_domain_into<P: AsRef<Path>>(mut self, domain: &str, path: P) -> Result<Self> {
+        let (_, token, key_authorization) = try!(self.get_http_challenge(domain));
 
         use std::fs::create_dir_all;
         let path = path.as_ref().join(".well-known").join("acme-challenge");
@@ -550,15 +572,34 @@ impl AcmeClient {
         Ok(self)
     }
 
+    pub fn validate_domains(self) -> Result<Self> {
+        // TODO: Validate main domain,
+        // then validate SANs if there are any.
+        let domain = try!(self.domain.clone().ok_or("Domain not found. Use domain() to set a primary domain")).clone();
 
-    /// Triggers HTTP validation to verify domain ownership.
+        let mut ac = try!(self.validate_domain(&domain));
+
+        // Identify each SAN
+        if let Some(sans) = ac.sans.clone() {
+            for san in sans {
+                ac = try!(ac.validate_domain(&san));
+            }
+        }
+
+        Ok(ac)
+
+    }
+
+    /// Starts validation to verify domain ownership. Blocking.
     /// Will use either the HTTP or DNS challenge.
-    pub fn simple_http_validation(self) -> Result<Self> {
+    pub fn validate_domain(self, domain: &str) -> Result<Self> {
         info!("Triggering simple HTTP validation");
-        let challenge = try!(self.challenge.clone().ok_or("No challenge found"));
-        let (uri, key_authorization) = match challenge {
-            AcmeChallenge::Http(uri, _, key_authorization) => (uri, key_authorization),
-            AcmeChallenge::Dns(uri, _, key_authorization) => (uri, key_authorization),
+        let (uri, key_authorization) = {
+            let challenge = try!(self.challenges.get(domain).clone().ok_or(format!("No challenge found for domain {}", domain)));
+            match challenge {
+                &AcmeChallenge::Http(ref uri, _, ref key_authorization) => (uri.to_owned(), key_authorization.to_owned()),
+                &AcmeChallenge::Dns(ref uri, _, ref key_authorization) => (uri.to_owned(), key_authorization.to_owned()),
+            }
         };
 
         let map = {
@@ -883,6 +924,10 @@ error_chain! {
             description("Acme server error")
                 display("Acme server error: {}", acme_server_error_description(resp))
         }
+        ConfigurationError(message: &'static str) {
+            description("Acme client configuration error")
+                display("{}", message)
+        }
     }
 }
 
@@ -1100,7 +1145,7 @@ mod tests {
             .and_then(|ac| ac.set_domain("example.org"))
             .and_then(|ac| ac.register_account(None))
             .and_then(|ac| ac.identify_domain(AcmeChallengeKind::Http))
-            .and_then(|ac| ac.get_http_challenge());
+            .and_then(|ac| ac.get_http_challenge("example.org"));
         assert!(ac.is_ok());
 
         let (uri, token, key_authorization) = ac.unwrap();
@@ -1118,7 +1163,7 @@ mod tests {
             .and_then(|ac| ac.set_domain("example.org"))
             .and_then(|ac| ac.register_account(None))
             .and_then(|ac| ac.identify_domain(AcmeChallengeKind::Dns))
-            .and_then(|ac| ac.get_dns_challenge());
+            .and_then(|ac| ac.get_dns_challenge("example.org"));
         assert!(ac.is_ok());
 
         let (uri, token, key_authorization) = ac.unwrap();
