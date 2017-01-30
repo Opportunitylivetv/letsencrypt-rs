@@ -548,11 +548,22 @@ impl AcmeClient {
     }
 
     pub fn save_http_challenge_into<P: AsRef<Path>>(self, path: P) -> Result<Self> {
-        if let Some(domain) = self.domain.clone() {
-            self.save_http_challenge_for_domain_into(&domain, path)
-        } else {
-            Err(ErrorKind::ConfigurationError("Domain not found. Use domain() to set a domain").into())
+        let mut ac = try!({
+            if let Some(domain) = self.domain.clone() {
+                self.save_http_challenge_for_domain_into(&domain, &path)
+            } else {
+                Err(ErrorKind::ConfigurationError("Domain not found. Use domain() to set a domain").into())
+            }
+        });
+
+        // Identify each SAN
+        if let Some(sans) = ac.sans.clone() {
+            for san in sans {
+                ac = try!(ac.save_http_challenge_for_domain_into(&san, &path));
+            }
         }
+
+        Ok(ac)
     }
 
     /// Saves validation token into `{path}/.well-known/acme-challenge/{token}`.
