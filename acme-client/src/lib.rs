@@ -14,7 +14,7 @@
 //!     .and_then(|ac| ac.register_account(Some("contact@example.org")))
 //!     .and_then(|ac| ac.identify_domain(AcmeChallengeKind::Http))
 //!     .and_then(|ac| ac.save_http_challenge_into("/var/www"))
-//!     .and_then(|ac| ac.simple_http_validation())
+//!     .and_then(|ac| ac.validate_domains())
 //!     .and_then(|ac| ac.sign_certificate())
 //!     .and_then(|ac| ac.save_domain_private_key("domain.key"))
 //!     .and_then(|ac| ac.save_signed_certificate("domain.crt"));
@@ -32,7 +32,7 @@
 //!     .and_then(|ac| ac.register_account(Some("contact@example.org")))
 //!     .and_then(|ac| ac.identify_domain(AcmeChallengeKind::Http))
 //!     .and_then(|ac| ac.save_http_challenge_into("/var/www"))
-//!     .and_then(|ac| ac.simple_http_validation())
+//!     .and_then(|ac| ac.validate_domains())
 //!     .and_then(|ac| ac.sign_certificate())
 //!     .and_then(|ac| ac.save_domain_private_key("domain.key"))
 //!     .and_then(|ac| ac.save_signed_certificate("domain.crt"));
@@ -100,7 +100,6 @@ const BIT_LENGTH: u32 = 2048;
 const LETSENCRYPT_CA_SERVER: &'static str = "https://acme-v01.api.letsencrypt.org";
 const LETSENCRYPT_AGREEMENT: &'static str = "https://letsencrypt.org/documents/LE-SA-v1.1.\
                                              1-August-1-2016.pdf";
-
 
 
 // header! is making a public struct,
@@ -1223,7 +1222,7 @@ mod tests {
 
     #[ignore]
     #[test]
-    fn test_simple_http_validation() {
+    fn test_validate_domains() {
         let _ = env_logger::init();
         let ac = AcmeClient::default()
             .set_ca_server(LETSENCRYPT_STAGING_CA_SERVER)
@@ -1232,7 +1231,7 @@ mod tests {
             .and_then(|ac| ac.register_account(None))
             .and_then(|ac| ac.identify_domain(AcmeChallengeKind::Http))
             .and_then(|ac| ac.save_http_challenge_into(&env::var("TEST_PUBLIC_DIR").unwrap()))
-            .and_then(|ac| ac.simple_http_validation());
+            .and_then(|ac| ac.validate_domains());
 
         if let Err(e) = ac.as_ref() {
             error!("{}", e);
@@ -1253,7 +1252,7 @@ mod tests {
             .and_then(|ac| ac.gen_csr())
             .and_then(|ac| ac.identify_domain(AcmeChallengeKind::Http))
             .and_then(|ac| ac.save_http_challenge_into(&env::var("TEST_PUBLIC_DIR").unwrap()))
-            .and_then(|ac| ac.simple_http_validation())
+            .and_then(|ac| ac.validate_domains())
             .and_then(|ac| ac.sign_certificate());
 
         if let Err(e) = ac.as_ref() {
@@ -1275,7 +1274,7 @@ mod tests {
             .and_then(|ac| ac.gen_csr())
             .and_then(|ac| ac.identify_domain(AcmeChallengeKind::Http))
             .and_then(|ac| ac.save_http_challenge_into(&env::var("TEST_PUBLIC_DIR").unwrap()))
-            .and_then(|ac| ac.simple_http_validation())
+            .and_then(|ac| ac.validate_domains())
             .and_then(|ac| ac.sign_certificate())
             .and_then(|ac| ac.save_signed_certificate("domain.crt"));
 
@@ -1299,7 +1298,7 @@ mod tests {
             .and_then(|ac| ac.gen_csr())
             .and_then(|ac| ac.identify_domain(AcmeChallengeKind::Http))
             .and_then(|ac| ac.save_http_challenge_into(&env::var("TEST_PUBLIC_DIR").unwrap()))
-            .and_then(|ac| ac.simple_http_validation())
+            .and_then(|ac| ac.validate_domains())
             .and_then(|ac| ac.sign_certificate())
             .and_then(|ac| ac.save_signed_certificate("domain.crt"));
         if let Err(e) = ac.as_ref() {
@@ -1335,7 +1334,7 @@ mod tests {
             .and_then(|ac| ac.register_account(Some("onur@onur.im")))
             .and_then(|ac| ac.identify_domain(AcmeChallengeKind::Http))
             .and_then(|ac| ac.save_http_challenge_into(&env::var("TEST_PUBLIC_DIR").unwrap()))
-            .and_then(|ac| ac.simple_http_validation())
+            .and_then(|ac| ac.validate_domains())
             .and_then(|ac| ac.sign_certificate())
             .and_then(|ac| ac.save_domain_private_key("domain.key"))
             .and_then(|ac| ac.save_signed_certificate("domain.crt"));
