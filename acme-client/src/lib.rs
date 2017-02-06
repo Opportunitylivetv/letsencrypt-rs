@@ -78,7 +78,7 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::io;
 use std::io::{Read, Write};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use openssl::crypto::rsa::RSA;
 use openssl::crypto::pkey::PKey;
@@ -137,7 +137,7 @@ pub struct AcmeClient {
     challenges: BTreeMap<String, AcmeChallenge>,
     signed_cert: Option<X509>,
     chain_url: Option<String>,
-    sans: Option<Vec<String>>,
+    sans: Option<BTreeSet<String>>,
     saved_challenge_path: Option<PathBuf>,
 }
 
@@ -177,10 +177,10 @@ impl AcmeClient {
     /// Add a Subject Alternative Name
     pub fn add_san(mut self, domain: &str) -> Result<Self> {
         if let Some(ref mut sans) = self.sans {
-            sans.push(domain.to_owned());
+            sans.insert(domain.to_owned());
         } else {
-            let mut sans = Vec::new();
-            sans.push(domain.to_owned());
+            let mut sans = BTreeSet::new();
+            sans.insert(domain.to_owned());
             self.sans = Some(sans);
         }
 
