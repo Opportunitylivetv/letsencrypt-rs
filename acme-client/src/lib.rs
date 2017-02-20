@@ -167,6 +167,14 @@ impl AcmeClient {
         Ok(AcmeClient::default())
     }
 
+    pub fn new_with_api(ca_server: &str, agreement: &str) -> Result<Self> {
+        let mut new = AcmeClient::default();
+        new.ca_server = ca_server.to_owned();
+        new.agreement = agreement.to_owned();
+
+        Ok(new)
+    }
+
 
     /// Sets domain name.
     pub fn set_domain(mut self, domain: &str) -> Result<Self> {
@@ -966,6 +974,12 @@ mod tests {
 
     // Use staging API in tests
     const LETSENCRYPT_STAGING_CA_SERVER: &'static str = "https://acme-staging.api.letsencrypt.org";
+    const BOULDER_SERVER: &'static str = "http://localhost:4000";
+    const BOULDER_AGREEMENT: &'static str = "http://boulder:4000/terms/v1";
+
+    fn create_test_domain() -> String {
+        "1234.abc.co".to_owned()
+    }
 
     #[test]
     fn test_gen_user_key() {
@@ -1077,7 +1091,7 @@ mod tests {
         let ac = AcmeClient::default().gen_user_key().unwrap();
         let mut map = BTreeMap::new();
         map.insert("resource".to_owned(), "new-reg".to_owned());
-        map.insert("aggreement".to_owned(), LETSENCRYPT_AGREEMENT.to_owned());
+        map.insert("aggreement".to_owned(), BOULDER_AGREEMENT.to_owned());
         let jws = ac.jws(map);
         assert!(jws.is_ok());
     }
@@ -1090,7 +1104,7 @@ mod tests {
             .and_then(|ac| ac.gen_user_key())
             .unwrap();
         let mut map = BTreeMap::new();
-        map.insert("aggreement".to_owned(), LETSENCRYPT_AGREEMENT.to_owned());
+        map.insert("aggreement".to_owned(), BOULDER_AGREEMENT.to_owned());
         let res = ac.request("new-reg", map);
         assert!(res.is_ok());
         let (status, _) = res.unwrap();
@@ -1210,21 +1224,14 @@ mod tests {
 
         let ac = ac.unwrap();
 
-        if let Some(ref sans) = ac.sans {
-            assert!(sans.len() == 2);
-        } else {
-            panic!("SANs field in AcmeClient should contain two Subject Alternate Names");
-        }
+        assert!(ac.sans.len() == 2);
     }
 
-    #[ignore]
     #[test]
     fn test_validate_domains() {
         let _ = env_logger::init();
-        let ac = AcmeClient::default()
-            .set_ca_server(LETSENCRYPT_STAGING_CA_SERVER)
-            .and_then(|ac| ac.load_user_key("tests/user.key"))
-            .and_then(|ac| ac.set_domain(&env::var("TEST_DOMAIN").unwrap()))
+        let ac = AcmeClient::new_with_api(BOULDER_SERVER, BOULDER_AGREEMENT)
+            .and_then(|ac| ac.set_domain(&create_test_domain()))
             .and_then(|ac| ac.register_account(None))
             .and_then(|ac| ac.identify_domain(AcmeChallengeKind::Http))
             .and_then(|ac| ac.save_http_challenge_into(&env::var("TEST_PUBLIC_DIR").unwrap()))
@@ -1237,14 +1244,11 @@ mod tests {
     }
 
 
-    #[ignore]
     #[test]
     fn test_sign_certificate() {
         let _ = env_logger::init();
-        let ac = AcmeClient::default()
-            .set_ca_server(LETSENCRYPT_STAGING_CA_SERVER)
-            .and_then(|ac| ac.load_user_key("tests/user.key"))
-            .and_then(|ac| ac.set_domain(&env::var("TEST_DOMAIN").unwrap()))
+        let ac = AcmeClient::new_with_api(BOULDER_SERVER, BOULDER_AGREEMENT)
+            .and_then(|ac| ac.set_domain(&create_test_domain()))
             .and_then(|ac| ac.register_account(None))
             .and_then(|ac| ac.gen_csr())
             .and_then(|ac| ac.identify_domain(AcmeChallengeKind::Http))
@@ -1259,14 +1263,11 @@ mod tests {
     }
 
 
-    #[ignore]
     #[test]
     fn test_save_certificate_into() {
         let _ = env_logger::init();
-        let ac = AcmeClient::default()
-            .set_ca_server(LETSENCRYPT_STAGING_CA_SERVER)
-            .and_then(|ac| ac.load_user_key("tests/user.key"))
-            .and_then(|ac| ac.set_domain(&env::var("TEST_DOMAIN").unwrap()))
+        let ac = AcmeClient::new_with_api(BOULDER_SERVER, BOULDER_AGREEMENT)
+            .and_then(|ac| ac.set_domain(&create_test_domain()))
             .and_then(|ac| ac.register_account(None))
             .and_then(|ac| ac.gen_csr())
             .and_then(|ac| ac.identify_domain(AcmeChallengeKind::Http))
@@ -1282,15 +1283,12 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_revoke_signed_certificate() {
         let _ = env_logger::init();
         // sign a certificate first
         debug!("Signing a certificate");
-        let ac = AcmeClient::default()
-            .set_ca_server(LETSENCRYPT_STAGING_CA_SERVER)
-            .and_then(|ac| ac.load_user_key("tests/user.key"))
-            .and_then(|ac| ac.set_domain(&env::var("TEST_DOMAIN").unwrap()))
+        let ac = AcmeClient::new_with_api(BOULDER_SERVER, BOULDER_AGREEMENT)
+            .and_then(|ac| ac.set_domain(&create_test_domain()))
             .and_then(|ac| ac.register_account(None))
             .and_then(|ac| ac.gen_csr())
             .and_then(|ac| ac.identify_domain(AcmeChallengeKind::Http))
@@ -1305,9 +1303,7 @@ mod tests {
 
         // try to revoke signed certificate
         debug!("Trying to revoke signed certificate");
-        let ac = AcmeClient::default()
-            .set_ca_server(LETSENCRYPT_STAGING_CA_SERVER)
-            .and_then(|ac| ac.load_user_key("tests/user.key"))
+        let ac = AcmeClient::new_with_api(BOULDER_SERVER, BOULDER_AGREEMENT)
             .and_then(|ac| ac.load_certificate("domain.crt"))
             .and_then(|ac| ac.revoke_signed_certificate());
 
@@ -1324,7 +1320,7 @@ mod tests {
         let ac = AcmeClient::default()
             .set_ca_server(LETSENCRYPT_STAGING_CA_SERVER)
             .and_then(|ac| ac.load_user_key("tests/user.key"))
-            .and_then(|ac| ac.set_domain(&env::var("TEST_DOMAIN").unwrap()))
+            .and_then(|ac| ac.set_domain(&create_test_domain()))
             .and_then(|ac| {
                 ac.set_chain_url("https://letsencrypt.org/certs/lets-encrypt-x3-cross-signed.pem")
             })
