@@ -78,6 +78,7 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::io;
 use std::io::{Read, Write};
+use std::iter::FromIterator;
 use std::collections::{BTreeMap, BTreeSet};
 
 use openssl::crypto::rsa::RSA;
@@ -136,7 +137,7 @@ pub struct AcmeClient {
     challenges: BTreeMap<String, AcmeChallenge>,
     signed_cert: Option<X509>,
     chain_url: Option<String>,
-    sans: Option<BTreeSet<String>>,
+    sans: BTreeSet<String>,
     saved_challenge_path: Option<PathBuf>,
 }
 
@@ -154,7 +155,7 @@ impl Default for AcmeClient {
             challenges: BTreeMap::default(),
             signed_cert: None,
             chain_url: None,
-            sans: None,
+            sans: BTreeSet::default(),
             saved_challenge_path: None,
         }
     }
@@ -175,14 +176,7 @@ impl AcmeClient {
 
     /// Add a Subject Alternative Name
     pub fn add_san(mut self, domain: &str) -> Result<Self> {
-        if let Some(ref mut sans) = self.sans {
-            sans.insert(domain.to_owned());
-        } else {
-            let mut sans = BTreeSet::new();
-            sans.insert(domain.to_owned());
-            self.sans = Some(sans);
-        }
-
+        self.sans.insert(domain.to_owned());
         Ok(self)
     }
 
@@ -345,8 +339,9 @@ impl AcmeClient {
             .set_sign_hash(Type::SHA256)
             .add_extension(Extension::KeyUsage(vec![KeyUsageOption::DigitalSignature]));
 
-        let generator = if let Some(ref sans) = self.sans {
-            let san_extensions = sans.iter()
+        let generator = if self.sans.len() > 0 {
+
+            let san_extensions = self.sans.iter()
                 .map(|name| (AltNameOption::DNS, name.clone())).collect();
 
             generator.add_extension(Extension::SubjectAltName(san_extensions))
@@ -509,12 +504,10 @@ impl AcmeClient {
             &domain));
 
         // Identify each SAN
-        if let Some(sans) = ac.sans.clone() {
-            for san in sans {
-                ac = try!(ac._identify_domain(
-                    expected_challenge,
-                    &san));
-            }
+        for san in ac.sans.clone() {
+            ac = try!(ac._identify_domain(
+                expected_challenge,
+                &san));
         }
 
         Ok(ac)
@@ -546,6 +539,14 @@ impl AcmeClient {
         }
     }
 
+    pub fn get_domain_set(&self) -> Result<Vec<String>> {
+        let domain = try!(self.domain.clone().ok_or("Domain not found. Use domain() to set a primary domain"));
+        let mut domains: Vec<String> = Vec::from_iter(self.sans.iter().cloned());
+        domains.push(domain);
+
+        Ok(domains)
+    }
+
     pub fn save_http_challenge_into<P: AsRef<Path>>(self, path: P) -> Result<Self> {
         let mut ac = try!({
             if let Some(domain) = self.domain.clone() {
@@ -556,10 +557,8 @@ impl AcmeClient {
         });
 
         // Identify each SAN
-        if let Some(sans) = ac.sans.clone() {
-            for san in sans {
-                ac = try!(ac.save_http_challenge_for_domain_into(&san, &path));
-            }
+        for san in ac.sans.clone() {
+            ac = try!(ac.save_http_challenge_for_domain_into(&san, &path));
         }
 
         Ok(ac)
@@ -590,10 +589,8 @@ impl AcmeClient {
         let mut ac = try!(self.validate_domain(&domain));
 
         // Identify each SAN
-        if let Some(sans) = ac.sans.clone() {
-            for san in sans {
-                ac = try!(ac.validate_domain(&san));
-            }
+        for san in ac.sans.clone() {
+            ac = try!(ac.validate_domain(&san));
         }
 
         Ok(ac)
